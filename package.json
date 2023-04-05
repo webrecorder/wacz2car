@@ -2,11 +2,10 @@
   "name": "wacz2car",
   "version": "1.0.0",
   "description": "Conver WACZ files to CAR files for uploading to IPFS.",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
     "test": "ava",
-    "build": "tsc",
-    "lint": "ts-standard --fix ./src && tsc --noEmit"
+    "lint": "standard --fix ./src"
   },
   "repository": {
     "type": "git",
@@ -29,10 +28,7 @@
   "homepage": "https://github.com/webrecorder/wacz2car#readme",
   "devDependencies": {
     "ava": "^5.2.0",
-    "tape": "^5.6.3",
-    "ts-node": "^10.9.1",
-    "ts-standard": "^12.0.2",
-    "typescript": "^5.0.0-beta"
+    "standard": "^17.0.0"
   },
   "dependencies": {
     "@ipld/car": "^5.1.1",
@@ -41,13 +37,5 @@
     "ipfs-car": "^1.0.0",
     "ipfs-unixfs": "^11.0.0",
     "multiformats": "^11.0.2"
-  },
-  "ava": {
-    "extensions": {
-      "ts": "module"
-    },
-    "nodeArguments": [
-      "--loader=ts-node/esm"
-    ]
   }
 }

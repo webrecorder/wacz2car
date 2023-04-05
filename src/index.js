@@ -1,10 +1,14 @@
-import { CID } from 'multiformats/cid'
-import { Block } from 'multiformats/block'
+/* global TransformStream */
+
+/*
+ * @typedef { import('multiformats/cid').CID } CID
+ * @typedef { import('multiformats/block').Block } Block
+ * @typedef { import('@ipld/unixfs').BlockWriter } BlockWriter
+ */
 import {
   createWriter,
   createFileWriter,
-  withCapacity,
-  BlockWriter
+  withCapacity
 } from '@ipld/unixfs'
 import { UnixFS } from 'ipfs-unixfs'
 import { CAREncoderStream } from 'ipfs-car'
@@ -14,15 +18,17 @@ import * as PB from '@ipld/dag-pb'
 const BLOCK_INLINE_SIZE = 32
 
 const DIRECTORY_SIGNATURE = 0x02014b50
+const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50
 
 const utf8decoder = new TextDecoder()
 
+/*
 export interface ChunkSettings {
   rawLeaves: boolean
   maxSize: number
 }
 
-const DEFAULT_CHUNK_SETTINGS: ChunkSettings = {
+const DEFAULT_CHUNK_SETTINGS = {
   rawLeaves: true,
   maxSize: 256
 }
@@ -51,18 +57,27 @@ interface WarcRecord {
   bodyOffset: number
   // TODO: Parsed header info?
 }
+*/
 
-export async function wacz2Car (waczBlob: Blob): { done: Promise<CID>, stream: ReadableStream<Uint8Array> } {
-  const { done, readable } = wacz2BlockStream
+/*
+ * @param {Blob} waczBlob
+ * @returns {CAREncoderStream}
+ */
+export function wacz2Car (waczBlob) {
+  const blockStream = wacz2BlockStream(waczBlob)
 
-  const carStream = new CAREncoderStream()
+  const carEncoder = new CAREncoderStream()
 
-  const stream = readable.pipeThrough(carStream)
+  const carStream = blockStream.pipeThrough(carEncoder)
 
-  return { done, stream }
+  return carStream
 }
 
-export function wacz2BlockStream (waczBlob: Blob): { done: Promise<CID>, readable: ReadableStream<Block> } {
+/*
+ * @param {Blob} waczBlob
+ * @returns {ReadableStream<Block>}
+*/
+export function wacz2BlockStream (waczBlob) {
   const { readable, writable } = new TransformStream(
     {},
     withCapacity(1048576 * 32)
@@ -70,17 +85,24 @@ export function wacz2BlockStream (waczBlob: Blob): { done: Promise<CID>, readabl
 
   const writer = createWriter({ writable })
 
-  const done = wacz2CarStream(waczBlob, writer).then((cid) => {
+  wacz2Writer(waczBlob, writer).then(async (cid) => {
     await writable.close()
-    return cid
+  }).catch((reason) => {
+    console.log(reason.stack)
+    writable.abort(reason.stack)
   })
 
-  return { done, readable }
+  return readable
 }
 
-// TODO: Cancellation signal?
-// TODO: Convert to a class for passing in options
-export async function wacz2Writer (waczBlob: Blob, writer: BlockWriter): Promise<CID> {
+/*
+ * @param {Blob} waczBlob
+ * @param {BlockWriter} writer
+ * @returns {Promise<CID>}
+*/
+export async function wacz2Writer (waczBlob, writer) {
+  // TODO: Convert to a class for passing in options
+
   const waczRoot = newNode()
   for await (const entry of splitZip(waczBlob)) {
     const isWaczFile = entry.fileName.endsWith('.warc')
@@ -103,7 +125,12 @@ export async function wacz2Writer (waczBlob: Blob, writer: BlockWriter): Promise
   return cid
 }
 
-export async function warc2Writer (warcBlob: Blob, writer: BlockWriter): Promise<CID> {
+/*
+ * @param {Blob} warcBlob
+ * @param {BlockWriter} writer
+ * @returns {Promise<CID>}
+*/
+export async function warc2Writer (warcBlob, writer) {
   const warcRoot = newNode()
 
   for await (const entry of splitWarc(warcBlob)) {
@@ -116,7 +143,11 @@ export async function warc2Writer (warcBlob: Blob, writer: BlockWriter): Promise
   return cid
 }
 
-async function * splitZip (zipBlob: Blob): AsyncIterator<ZipEntry> {
+/*
+ * @param {Blob} zipBlob
+ * @returns {AsyncIterator<ZipEntry>}
+*/
+async function * splitZip (zipBlob) {
   // Start reading headers from the blob
   let offset = 0
   const maxSize = zipBlob.size
@@ -129,7 +160,11 @@ async function * splitZip (zipBlob: Blob): AsyncIterator<ZipEntry> {
   }
 }
 
-async function getZipEntry (zipBlob: Blob): Promise<ZipEntry> {
+/*
+ * @param {Blob} zipBlob
+ * @returns {Promise<ZipEntry>}
+*/
+async function getZipEntry (zipBlob) {
   const headerBuffer = await zipBlob.slice(0, 30).arrayBuffer()
   const headerView = new DataView(headerBuffer)
 
@@ -145,39 +180,64 @@ async function getZipEntry (zipBlob: Blob): Promise<ZipEntry> {
       fileName: '',
       isCentralDirectory: true
     }
+  } else if(signature !== LOCAL_FILE_HEADER_SIGNATURE) {
+    throw new Error(`Unrecognized ZIP header signature ${signature.toString(16)}`)
   }
 
   const compressionMethod = headerView.getUint16(8, true)
   // TODO: Better message with what to do about it?
-  if (compressionMethod !== 0) throw new Error('Unable to process compressed ZIP files')
+  if (compressionMethod !== 0) throw new Error(`Unable to process compressed ZIP files. Expected compression '0x00', got ${compressionMethod.toString(16)}`)
 
   // TODO: This is the "uncompressed" size. Should we also check agains the compressed size?
+  // Some ZIPs don't have a size
   const size = headerView.getUint32(22, true)
   const nameLength = headerView.getUint16(26, true)
   const extraLength = headerView.getUint16(28, true)
   const headerLength = 30 + nameLength + extraLength
 
-  const nameBuffer = await zipBlob.slice(30, nameLength).arrayBuffer()
+  // For some reason this is yielding a Blob of size 77 instead of a blob of size nameLength
+  const nameBuffer = await zipBlob.slice(30, 30 + nameLength).arrayBuffer()
   const fileName = utf8decoder.decode(nameBuffer)
 
-  const dataBlob = zipBlob.slice(headerLength, size)
+  const dataBlob = zipBlob.slice(headerLength, headerLength + size)
   const headerBlob = zipBlob.slice(0, headerLength)
   const totalSize = size + headerLength
 
-  return {
+  const entry = {
     dataBlob,
     headerBlob,
     totalSize,
     fileName,
     isCentralDirectory: false
   }
+
+  console.log({
+    entry,
+    nameLength,
+    extraLength,
+    nameBuffer,
+    headerLength,
+    size,
+    nameEnd,
+  })
+
+  return entry
 }
 
-async function * splitWarc (warcBlob: Blob): AsyncIterator<WarcRecord> {
+/*
+ * @param {Blob} warcBlob
+ * @returns {AsyncIterator<WarcRecord>}
+*/
+async function * splitWarc (warcBlob) {
   // Stat reading warc headings
 }
 
-async function putUnixFS (file: UnixFSInProgress, writer: BlockWriter): CID {
+/*
+ * @param {UnixFSInProgress} file
+ * @param {BlockWriter} writer
+ * @returns {CID}
+*/
+async function putUnixFS (file, writer) {
   const data = file.node.marshal()
 
   const toEncode = {
@@ -193,7 +253,13 @@ async function putUnixFS (file: UnixFSInProgress, writer: BlockWriter): CID {
   return block.cid
 }
 
-async function concatBlob (file: UnixFSInProgress, blob: Blob, writer: BlockWriter): Promise<void> {
+/*
+ * @param {UnixFSInProgress} file
+ * @param {Blob} blob
+ * @param {BlockWriter} writer
+ * @returns {Promise<void>}
+*/
+async function concatBlob (file, blob, writer) {
   // Detect size
   const size = blob.size
   if (size <= BLOCK_INLINE_SIZE) {
@@ -208,7 +274,13 @@ async function concatBlob (file: UnixFSInProgress, blob: Blob, writer: BlockWrit
   }
 }
 
-function concatCID (file: UnixFSInProgress, cid: CID, fileSize): void {
+/*
+ * @param {UnixFSInProgress} file
+ * @param {CID} cid
+ * @param {number} fileSize
+ * @returns {void}
+*/
+function concatCID (file, cid, fileSize) {
   file.node.addBlockSize(fileSize)
   file.links.push({
     Name: '',
@@ -217,7 +289,10 @@ function concatCID (file: UnixFSInProgress, cid: CID, fileSize): void {
   })
 }
 
-function newNode (): UnixFSInProgress {
+/*
+ * @returns {UnixFSInProgress}
+ */
+function newNode () {
   return {
     node: new UnixFS({ type: 'file' }),
     links: []
