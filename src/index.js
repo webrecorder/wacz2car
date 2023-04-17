@@ -12,13 +12,19 @@ import {
 } from '@ipld/unixfs'
 import { UnixFS } from 'ipfs-unixfs'
 import { CAREncoderStream } from 'ipfs-car'
+
 import * as PB from '@ipld/dag-pb'
+import { CID } from 'multiformats/cid'
+import { sha256 } from 'multiformats/hashes/sha2'
 
 // Blocks smaller than or equal to this size will be inlined into a CID
 const BLOCK_INLINE_SIZE = 32
 
 const DIRECTORY_SIGNATURE = 0x02014b50
 const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50
+const CENTRAL_DIRECTORY_FILE_SIGNATURE = 0x02014b50
+const EOCD_SIGNATURE = 0x06054b50
+const EOCD_SIGNATURE_BYTE_LENGTH = 4
 
 const utf8decoder = new TextDecoder()
 
@@ -45,11 +51,15 @@ interface UnixFSInProgress {
 }
 
 interface ZipEntry {
-  dataBlob: Blob
-  headerBlob: Blob | null
-  totalSize: number
-  fileName: string
-  isCentralDirectory: boolean
+  data: Blob
+  name: string
+}
+
+interface ZipEntryOffset {
+  start: number
+  size: number
+  name: string
+  next: number
 }
 
 interface WarcRecord {
@@ -85,10 +95,13 @@ export function wacz2BlockStream (waczBlob) {
 
   const writer = createWriter({ writable })
 
-  wacz2Writer(waczBlob, writer).then(async (cid) => {
-    await writable.close()
+  wacz2Writer(waczBlob, writer).then(async () => {
+    console.trace('Waiting writer ready', writer.writer)
+    await writer.writer.ready
+
+    console.trace('Writer ready!', writer.writer)
   }).catch((reason) => {
-    console.log(reason.stack)
+    console.trace(reason.stack)
     writable.abort(reason.stack)
   })
 
@@ -104,19 +117,14 @@ export async function wacz2Writer (waczBlob, writer) {
   // TODO: Convert to a class for passing in options
 
   const waczRoot = newNode()
-  for await (const entry of splitZip(waczBlob)) {
-    const isWaczFile = entry.fileName.endsWith('.warc')
-    if (isWaczFile === true) {
-      if (entry.headerBlob !== null) {
-        await concatBlob(waczRoot, entry.headerBlob, writer)
-      }
-      const cid = await warc2Writer(entry.dataBlob, writer)
-      concatCID(waczRoot, cid, entry.blob.size)
+  for await (const { data, name } of splitZip(waczBlob)) {
+    console.trace(name, data.size)
+    const isWaczFile = name.endsWith('.warc')
+    if (isWaczFile) {
+      const cid = await warc2Writer(data, writer)
+      concatCID(waczRoot, cid, data.size)
     } else {
-      if (entry.headerBlob !== null) {
-        await concatBlob(waczRoot, entry.headerBlob, writer)
-      }
-      await concatBlob(waczRoot, entry.dataBlob, writer)
+      await concatBlob(waczRoot, data, writer)
     }
   }
 
@@ -148,16 +156,148 @@ export async function warc2Writer (warcBlob, writer) {
  * @returns {AsyncIterator<ZipEntry>}
 */
 async function * splitZip (zipBlob) {
-  // Start reading headers from the blob
-  let offset = 0
-  const maxSize = zipBlob.size
-  while (offset < maxSize) {
-    const chunk = zipBlob.slice(offset)
-    const entry = await getZipEntry(chunk)
-    yield entry
-    if (entry.isCentralDirectory) break
-    offset += entry.totalSize
+  const eocdSignatureOffset = await findEOCDStart(zipBlob)
+
+  // EOCD is at the end of the buffer, so lets read the whole thing
+  // Hopefully the "comment" and the rest of the data isn't too huge?
+  const eocdBuffer = await zipBlob.slice(eocdSignatureOffset).arrayBuffer()
+  const eocdView = new DataView(eocdBuffer)
+
+  const eocdStart = eocdView.getUint32(16, true)
+
+  const entryOffsets = []
+
+  let entryOffset = eocdStart
+
+  // Build list, then sort by early first
+  while (entryOffset < eocdStart) {
+    const chunk = zipBlob.slice(entryOffset)
+    const zipEntryOffset = await getEntryOffset(chunk)
+    entryOffsets.push(zipEntryOffset)
+    entryOffset += zipEntryOffset.next
   }
+
+  entryOffsets.sort((a, b) => a.start - b.start)
+
+  let readOffset = 0
+
+  for (const entryInfo of entryOffsets) {
+    const { start, size, name } = entryInfo
+    if (start !== readOffset) {
+      const rawBlob = zipBlob.slice(readOffset, start)
+
+      yield { data: rawBlob, name: '' }
+    }
+    const headerSize = await getZipEntryHeaderSize(zipBlob.slice(start))
+    const fileStart = start + headerSize
+    const headerBlob = zipBlob.slice(start, fileStart)
+    yield { data: headerBlob, name: '' }
+
+    const fileEnd = fileStart + size
+    const fileBlob = zipBlob.slice(fileStart, fileEnd)
+    yield { data: fileBlob, name }
+
+    readOffset = fileEnd
+  }
+
+  const finalBlob = zipBlob.slice(readOffset)
+
+  yield { data: finalBlob, name: '' }
+}
+
+/*
+ * @param {Blob} entryBlob
+ * @returns {Promise<ZipEntryOffset>}
+*/
+async function getEntryOffset (entryBlob) {
+  const fileHeaderBuffer = await entryBlob.slice(0, 46)
+  const fileHeaderView = new DataView(fileHeaderBuffer)
+
+  const signature = fileHeaderView.getUint32(0, true)
+  if (signature !== CENTRAL_DIRECTORY_FILE_SIGNATURE) {
+    throw new Error(`Got invalid signature for central directory file header. Got ${signature.toString(16)}, expected ${CENTRAL_DIRECTORY_FILE_SIGNATURE.toString(16)}`)
+  }
+
+  const compressionMethod = fileHeaderView.getUint16(10, true)
+
+  if (compressionMethod !== 0) {
+    throw new Error(`Unable to support compressed ZIP files. Got compression ${compressionMethod}, expected 0`)
+  }
+
+  const fileUncompressedSize = fileHeaderView.getUint32(24, true)
+  const fileNameLength = fileHeaderView.getUint16(28, true)
+  const fileHeaderStart = fileHeaderView.getUint32(42, true)
+  const extraFieldLength = fileHeaderView.getUint16(30, true)
+  const fileCommentLength = fileHeaderView.getUint16(32, true)
+
+  let fileNameBuffer = await entryBlob.slice(46, 46 + fileNameLength).arrayBuffer()
+
+  if (fileNameBuffer.byteLength > fileNameLength) {
+    fileNameBuffer = fileNameBuffer.slice(0, fileNameLength)
+  }
+
+  const name = utf8decoder.decode(fileNameBuffer)
+  const start = fileHeaderStart
+  const size = fileUncompressedSize
+
+  const next = 46 + fileNameLength + extraFieldLength + fileCommentLength
+
+  return { start, size, name, next }
+}
+
+/*
+ * @param {Blob} zipBlob
+ * @returns {Promise<Number>}
+*/
+async function findEOCDStart (zipBlob) {
+  // Start reading from the end assuming there's no comment
+  let startByte = zipBlob.size - 22
+
+  // Keep searching until we reach the beginning
+  while (startByte >= 0) {
+    const endByte = startByte + EOCD_SIGNATURE_BYTE_LENGTH
+    const buffer = await zipBlob.slice(startByte, endByte).arrayBuffer()
+    const view = new DataView(buffer)
+    const signature = view.getUint32(0, true)
+
+    if (signature === EOCD_SIGNATURE) {
+      return startByte
+    }
+
+    startByte--
+  }
+
+  throw new Error('Unable to find EOCD signature in ZIP file. Check to see if it is corrupted.')
+}
+
+/*
+ * @param {Blob} zipBlob
+ * @returns {Promise<Number>}
+*/
+async function getZipEntryHeaderSize (zipBlob) {
+  // Parse out the header info and where it ends
+
+  const headerBuffer = await zipBlob.slice(0, 30).arrayBuffer()
+  const headerView = new DataView(headerBuffer)
+
+  // TODO: Account for "data descriptors"?
+  const signature = headerView.getUint32(0, true)
+
+  if (signature !== LOCAL_FILE_HEADER_SIGNATURE) {
+    throw new Error(`Unrecognized ZIP header signature ${signature.toString(16)}, expected ${LOCAL_FILE_HEADER_SIGNATURE.toString(16)}`)
+  }
+
+  const compressionMethod = headerView.getUint16(8, true)
+  // TODO: Better message with what to do about it?
+  if (compressionMethod !== 0) throw new Error(`Unable to process compressed ZIP files. Expected compression '0x00', got ${compressionMethod.toString(16)}`)
+
+  // TODO: This is the "uncompressed" size. Should we also check agains the compressed size?
+  // Some ZIPs don't have a size
+  const nameLength = headerView.getUint16(26, true)
+  const extraLength = headerView.getUint16(28, true)
+  const headerLength = 30 + nameLength + extraLength
+
+  return headerLength
 }
 
 /*
@@ -171,16 +311,7 @@ async function getZipEntry (zipBlob) {
   // TODO: Account for "data descriptors"?
   const signature = headerView.getUint32(0, true)
 
-  if (signature === DIRECTORY_SIGNATURE) {
-    // Remainder of the blob should contain the directory?
-    return {
-      dataBlob: zipBlob,
-      headerBlob: null,
-      totalSize: zipBlob.size,
-      fileName: '',
-      isCentralDirectory: true
-    }
-  } else if(signature !== LOCAL_FILE_HEADER_SIGNATURE) {
+  if (signature !== LOCAL_FILE_HEADER_SIGNATURE) {
     throw new Error(`Unrecognized ZIP header signature ${signature.toString(16)}`)
   }
 
@@ -189,37 +320,20 @@ async function getZipEntry (zipBlob) {
   if (compressionMethod !== 0) throw new Error(`Unable to process compressed ZIP files. Expected compression '0x00', got ${compressionMethod.toString(16)}`)
 
   // TODO: This is the "uncompressed" size. Should we also check agains the compressed size?
-  // Some ZIPs don't have a size
-  const size = headerView.getUint32(22, true)
   const nameLength = headerView.getUint16(26, true)
   const extraLength = headerView.getUint16(28, true)
   const headerLength = 30 + nameLength + extraLength
 
   // For some reason this is yielding a Blob of size 77 instead of a blob of size nameLength
   const nameBuffer = await zipBlob.slice(30, 30 + nameLength).arrayBuffer()
-  const fileName = utf8decoder.decode(nameBuffer)
+  const name = utf8decoder.decode(nameBuffer)
 
-  const dataBlob = zipBlob.slice(headerLength, headerLength + size)
-  const headerBlob = zipBlob.slice(0, headerLength)
-  const totalSize = size + headerLength
+  const fullHeaderBlob = zipBlob.slice(0, headerLength)
 
   const entry = {
-    dataBlob,
-    headerBlob,
-    totalSize,
-    fileName,
-    isCentralDirectory: false
+    data: fullHeaderBlob,
+    name
   }
-
-  console.log({
-    entry,
-    nameLength,
-    extraLength,
-    nameBuffer,
-    headerLength,
-    size,
-    nameEnd,
-  })
 
   return entry
 }
@@ -238,6 +352,7 @@ async function * splitWarc (warcBlob) {
  * @returns {CID}
 */
 async function putUnixFS (file, writer) {
+  console.trace('putUnixFS', file)
   const data = file.node.marshal()
 
   const toEncode = {
@@ -246,11 +361,15 @@ async function putUnixFS (file, writer) {
   }
 
   // Encode block to dag-pb
-  const block = PB.encode(toEncode)
+  const bytes = PB.encode(toEncode)
 
-  await writer.write(block)
+  // TODO: Provide options for
+  const hash = await sha256.digest(bytes)
+  const cid = CID.create(1, PB.code, hash)
 
-  return block.cid
+  await writer.writer.write({ cid, bytes })
+
+  return cid
 }
 
 /*
@@ -260,6 +379,7 @@ async function putUnixFS (file, writer) {
  * @returns {Promise<void>}
 */
 async function concatBlob (file, blob, writer) {
+  console.trace('concatBlob', file, blob)
   // Detect size
   const size = blob.size
   if (size <= BLOCK_INLINE_SIZE) {
@@ -281,10 +401,10 @@ async function concatBlob (file, blob, writer) {
  * @returns {void}
 */
 function concatCID (file, cid, fileSize) {
-  file.node.addBlockSize(fileSize)
+  file.node.addBlockSize(BigInt(fileSize))
   file.links.push({
     Name: '',
-    TSize: fileSize,
+    Tsize: fileSize,
     Hash: cid
   })
 }

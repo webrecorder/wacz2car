@@ -15,6 +15,7 @@ test('Convert example to a CAR', async (t) => {
   const carChunks = []
 
   for await (const carChunk of stream) {
+    console.log({carChunk})
     carChunks.push(carChunk)
   }
 
