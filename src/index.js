@@ -96,12 +96,10 @@ export function wacz2BlockStream (waczBlob) {
   const writer = createWriter({ writable })
 
   wacz2Writer(waczBlob, writer).then(async () => {
-    console.trace('Waiting writer ready', writer.writer)
     await writer.writer.ready
-
-    console.trace('Writer ready!', writer.writer)
+    await writer.close()
   }).catch((reason) => {
-    console.trace(reason.stack)
+    console.error(reason.stack)
     writable.abort(reason.stack)
   })
 
@@ -118,7 +116,7 @@ export async function wacz2Writer (waczBlob, writer) {
 
   const waczRoot = newNode()
   for await (const { data, name } of splitZip(waczBlob)) {
-    console.trace(name, data.size)
+    console.log('entry', name, data.size)
     const isWaczFile = name.endsWith('.warc')
     if (isWaczFile) {
       const cid = await warc2Writer(data, writer)
@@ -165,14 +163,17 @@ async function * splitZip (zipBlob) {
 
   const eocdStart = eocdView.getUint32(16, true)
 
+  console.log({ eocdStart, eocdSignatureOffset })
+
   const entryOffsets = []
 
   let entryOffset = eocdStart
 
   // Build list, then sort by early first
-  while (entryOffset < eocdStart) {
+  while (entryOffset < eocdSignatureOffset) {
     const chunk = zipBlob.slice(entryOffset)
     const zipEntryOffset = await getEntryOffset(chunk)
+    console.log('fileOffset', zipEntryOffset)
     entryOffsets.push(zipEntryOffset)
     entryOffset += zipEntryOffset.next
   }
@@ -210,7 +211,7 @@ async function * splitZip (zipBlob) {
  * @returns {Promise<ZipEntryOffset>}
 */
 async function getEntryOffset (entryBlob) {
-  const fileHeaderBuffer = await entryBlob.slice(0, 46)
+  const fileHeaderBuffer = await entryBlob.slice(0, 46).arrayBuffer()
   const fileHeaderView = new DataView(fileHeaderBuffer)
 
   const signature = fileHeaderView.getUint32(0, true)
@@ -352,7 +353,6 @@ async function * splitWarc (warcBlob) {
  * @returns {CID}
 */
 async function putUnixFS (file, writer) {
-  console.trace('putUnixFS', file)
   const data = file.node.marshal()
 
   const toEncode = {
@@ -379,7 +379,6 @@ async function putUnixFS (file, writer) {
  * @returns {Promise<void>}
 */
 async function concatBlob (file, blob, writer) {
-  console.trace('concatBlob', file, blob)
   // Detect size
   const size = blob.size
   if (size <= BLOCK_INLINE_SIZE) {
@@ -387,7 +386,15 @@ async function concatBlob (file, blob, writer) {
   } else {
     // TODO: Pass chunking options here
     const fileWriter = createFileWriter(writer)
-    await fileWriter.write(blob)
+    const stream = blob.stream()
+    const reader = await stream.getReader()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      fileWriter.write(value)
+    }
+
     const { cid } = await fileWriter.close()
 
     concatCID(file, cid, blob.size)

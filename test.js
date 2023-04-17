@@ -1,7 +1,8 @@
 import test from 'ava'
 import { openAsBlob } from 'node:fs'
 
-import { CarReader, CarWriter } from '@ipld/car'
+import {CarBufferReader} from '@ipld/car'
+import { recursive as exporter } from 'ipfs-unixfs-exporter'
 
 import {wacz2Car} from './src/index.js'
 
@@ -10,16 +11,29 @@ test('Convert example to a CAR', async (t) => {
 
   const stream = wacz2Car(exampleBlob)
 
-  console.log(stream)
-
   const carChunks = []
 
   for await (const carChunk of stream) {
-    console.log({carChunk})
+    console.log('chunk', carChunk.length)
     carChunks.push(carChunk)
   }
 
   const carBuffer = Buffer.from(carChunks)
 
-  // TODO: Do something with chunks?
+  const reader = CarBufferReader.fromBytes(carBuffer)
+
+  const entries = exporter(roots[0], {
+  async get (cid) {
+    const block = await reader.get(cid)
+    return block.bytes
+  }
+})
+
+for await (const entry of entries) {
+  if (entry.type === 'file' || entry.type === 'raw') {
+    console.log('file', entry.path, entry.content)
+  } else if (entry.type === 'directory') {
+    console.log('directory', entry.path)
+  }
+}
 })
