@@ -76,11 +76,11 @@ interface WarcRecord {
 export function wacz2Car (waczBlob) {
   const blockStream = wacz2BlockStream(waczBlob)
 
-  const carEncoder = new CAREncoderStream()
+  const carEncoder = new CAREncoderStream([])
 
-  const carStream = blockStream.pipeThrough(carEncoder)
+  blockStream.pipeThrough(carEncoder)
 
-  return carStream
+  return carEncoder
 }
 
 /*
@@ -116,7 +116,6 @@ export async function wacz2Writer (waczBlob, writer) {
 
   const waczRoot = newNode()
   for await (const { data, name } of splitZip(waczBlob)) {
-    console.log('entry', name, data.size)
     const isWaczFile = name.endsWith('.warc')
     if (isWaczFile) {
       const cid = await warc2Writer(data, writer)
@@ -163,8 +162,6 @@ async function * splitZip (zipBlob) {
 
   const eocdStart = eocdView.getUint32(16, true)
 
-  console.log({ eocdStart, eocdSignatureOffset })
-
   const entryOffsets = []
 
   let entryOffset = eocdStart
@@ -173,7 +170,6 @@ async function * splitZip (zipBlob) {
   while (entryOffset < eocdSignatureOffset) {
     const chunk = zipBlob.slice(entryOffset)
     const zipEntryOffset = await getEntryOffset(chunk)
-    console.log('fileOffset', zipEntryOffset)
     entryOffsets.push(zipEntryOffset)
     entryOffset += zipEntryOffset.next
   }

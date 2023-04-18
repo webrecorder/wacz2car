@@ -1,39 +1,57 @@
 import test from 'ava'
 import { openAsBlob } from 'node:fs'
 
-import {CarBufferReader} from '@ipld/car'
+import { CarBufferReader } from '@ipld/car'
 import { recursive as exporter } from 'ipfs-unixfs-exporter'
 
-import {wacz2Car} from './src/index.js'
+import { wacz2Car } from './src/index.js'
 
 test('Convert example to a CAR', async (t) => {
   const exampleBlob = await openAsBlob('fixtures/example.wacz')
+
+  const fullBuffer = await exampleBlob.arrayBuffer()
 
   const stream = wacz2Car(exampleBlob)
 
   const carChunks = []
 
-  for await (const carChunk of stream) {
-    console.log('chunk', carChunk.length)
+  for await (const carChunk of stream.readable) {
     carChunks.push(carChunk)
   }
 
-  const carBuffer = Buffer.from(carChunks)
+  const fileRoot = stream.finalBlock.cid
+
+  const carBuffer = Buffer.concat(carChunks)
+
+  t.pass('Successfully generated CAR file')
 
   const reader = CarBufferReader.fromBytes(carBuffer)
 
-  const entries = exporter(roots[0], {
-  async get (cid) {
-    const block = await reader.get(cid)
-    return block.bytes
-  }
+  t.pass('Generated CAR file can be parsed')
+
+  const entries = exporter(fileRoot, {
+    async get (cid) {
+      const block = await reader.get(cid)
+      return block.bytes
+    }
+  })
+
+  const [file] = await collect(entries)
+
+  t.assert(file, 'got file back out of CAR')
+
+  console.log(file.node.Links)
+
+  const fileChunks = await collect(file.content())
+  const fileBuffer = Buffer.concat(fileChunks).buffer
+
+  t.deepEqual(fileBuffer, fullBuffer, 'Resulting WACZ is same as input')
 })
 
-for await (const entry of entries) {
-  if (entry.type === 'file' || entry.type === 'raw') {
-    console.log('file', entry.path, entry.content)
-  } else if (entry.type === 'directory') {
-    console.log('directory', entry.path)
+async function collect (iterator) {
+  const list = []
+  for await (const item of iterator) {
+    list.push(item)
   }
+  return list
 }
-})

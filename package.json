@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "ava",
-    "lint": "standard --fix ./src"
+    "lint": "standard --fix ./src test.js"
   },
   "repository": {
     "type": "git",
