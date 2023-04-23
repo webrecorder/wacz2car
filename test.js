@@ -45,7 +45,14 @@ test('Convert example to a CAR', async (t) => {
   const fileChunks = await collect(file.content())
   const fileBuffer = Buffer.concat(fileChunks).buffer
 
-  t.deepEqual(fileBuffer, fullBuffer, 'Resulting WACZ is same as input')
+  const actual = new Uint8Array(fileBuffer);
+  const expected = new Uint8Array(fullBuffer);
+
+  // check sizes first
+  t.is(actual.length, expected.length);
+
+  // check data
+  t.deepEqual(actual, expected, 'Resulting WACZ is same as input')
 })
 
 async function collect (iterator) {

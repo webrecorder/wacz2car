@@ -116,12 +116,12 @@ export async function wacz2Writer (waczBlob, writer) {
 
   const waczRoot = newNode()
   for await (const { data, name } of splitZip(waczBlob)) {
-    const isWaczFile = name.endsWith('.warc')
-    if (isWaczFile) {
+    const isWarcFile = name.endsWith('.warc')
+    if (isWarcFile) {
       const cid = await warc2Writer(data, writer)
       concatCID(waczRoot, cid, data.size)
     } else {
-      await concatBlob(waczRoot, data, writer)
+      await concatBlob(waczRoot, data, writer, name)
     }
   }
 
@@ -180,18 +180,21 @@ async function * splitZip (zipBlob) {
 
   for (const entryInfo of entryOffsets) {
     const { start, size, name } = entryInfo
-    if (start !== readOffset) {
-      const rawBlob = zipBlob.slice(readOffset, start)
+    // no need for this as separate blob, small blob
+    // can just start next chunk from 'readOffset'
+    //if (start !== readOffset) {
+    //  const rawBlob = slice(zipBlob, readOffset, start)
 
-      yield { data: rawBlob, name: '' }
-    }
+    //  yield { data: rawBlob, name: '' }
+    //}
     const headerSize = await getZipEntryHeaderSize(zipBlob.slice(start))
     const fileStart = start + headerSize
-    const headerBlob = zipBlob.slice(start, fileStart)
+    //const headerBlob = slice(zipBlob, start, fileStart)
+    const headerBlob = slice(zipBlob, readOffset, fileStart)
     yield { data: headerBlob, name: '' }
 
     const fileEnd = fileStart + size
-    const fileBlob = zipBlob.slice(fileStart, fileEnd)
+    const fileBlob = slice(zipBlob, fileStart, fileEnd)
     yield { data: fileBlob, name }
 
     readOffset = fileEnd
@@ -227,7 +230,7 @@ async function getEntryOffset (entryBlob) {
   const extraFieldLength = fileHeaderView.getUint16(30, true)
   const fileCommentLength = fileHeaderView.getUint16(32, true)
 
-  let fileNameBuffer = await entryBlob.slice(46, 46 + fileNameLength).arrayBuffer()
+  let fileNameBuffer = await slice(entryBlob, 46, 46 + fileNameLength).arrayBuffer()
 
   if (fileNameBuffer.byteLength > fileNameLength) {
     fileNameBuffer = fileNameBuffer.slice(0, fileNameLength)
@@ -253,7 +256,7 @@ async function findEOCDStart (zipBlob) {
   // Keep searching until we reach the beginning
   while (startByte >= 0) {
     const endByte = startByte + EOCD_SIGNATURE_BYTE_LENGTH
-    const buffer = await zipBlob.slice(startByte, endByte).arrayBuffer()
+    const buffer = await slice(zipBlob, startByte, endByte).arrayBuffer()
     const view = new DataView(buffer)
     const signature = view.getUint32(0, true)
 
@@ -322,7 +325,7 @@ async function getZipEntry (zipBlob) {
   const headerLength = 30 + nameLength + extraLength
 
   // For some reason this is yielding a Blob of size 77 instead of a blob of size nameLength
-  const nameBuffer = await zipBlob.slice(30, 30 + nameLength).arrayBuffer()
+  const nameBuffer = await slice(zipBlob, 30, 30 + nameLength).arrayBuffer()
   const name = utf8decoder.decode(nameBuffer)
 
   const fullHeaderBlob = zipBlob.slice(0, headerLength)
@@ -374,22 +377,29 @@ async function putUnixFS (file, writer) {
  * @param {BlockWriter} writer
  * @returns {Promise<void>}
 */
-async function concatBlob (file, blob, writer) {
+async function concatBlob (file, blob, writer, name) {
   // Detect size
   const size = blob.size
-  if (size <= BLOCK_INLINE_SIZE) {
+  // disabled for now
+  if (false && size <= BLOCK_INLINE_SIZE) {
     // TODO: Make inline CID instead of block encoding of the data
   } else {
     // TODO: Pass chunking options here
     const fileWriter = createFileWriter(writer)
+
+    let actualSize = 0;
+
     const stream = blob.stream()
     const reader = await stream.getReader()
 
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+      actualSize += value.length;
       fileWriter.write(value)
     }
+
+    console.log("actualSize", "size", actualSize, size, name ? name : "<zip data>");
 
     const { cid } = await fileWriter.close()
 
@@ -420,4 +430,9 @@ function newNode () {
     node: new UnixFS({ type: 'file' }),
     links: []
   }
+}
+
+// for now, as slice() returns incorrect length if offset is not 0!
+function slice(blob, start, end) {
+  return blob.slice(start, end).slice(0, end - start);
 }
