@@ -4,14 +4,19 @@ import { openAsBlob } from 'node:fs'
 import { CarBufferReader } from '@ipld/car'
 import { recursive as exporter } from 'ipfs-unixfs-exporter'
 
+import { createLoader } from '@webrecorder/wabac/src/blockloaders.js'
+
 import { wacz2Car } from './src/index.js'
 
 test('Convert example to a CAR', async (t) => {
   const exampleBlob = await openAsBlob('fixtures/example.wacz')
+  const url = URL.createObjectURL(exampleBlob)
+
+  const loader = await createLoader({ url })
 
   const fullBuffer = await exampleBlob.arrayBuffer()
 
-  const stream = wacz2Car(exampleBlob)
+  const stream = wacz2Car(loader)
 
   const carChunks = []
 
@@ -40,16 +45,16 @@ test('Convert example to a CAR', async (t) => {
 
   t.assert(file, 'got file back out of CAR')
 
-  console.log(file.node.Links)
+  // console.log(file.node.Links)
 
   const fileChunks = await collect(file.content())
   const fileBuffer = Buffer.concat(fileChunks).buffer
 
-  const actual = new Uint8Array(fileBuffer);
-  const expected = new Uint8Array(fullBuffer);
+  const actual = new Uint8Array(fileBuffer)
+  const expected = new Uint8Array(fullBuffer)
 
   // check sizes first
-  t.is(actual.length, expected.length);
+  t.is(actual.length, expected.length)
 
   // check data
   t.deepEqual(actual, expected, 'Resulting WACZ is same as input')

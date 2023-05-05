@@ -34,6 +34,7 @@
     "@ipld/car": "^5.1.1",
     "@ipld/dag-pb": "^4.0.2",
     "@ipld/unixfs": "^2.1.1",
+    "@webrecorder/wabac": "^2.15.5",
     "ipfs-car": "^1.0.0",
     "ipfs-unixfs": "^11.0.0",
     "multiformats": "^11.0.2"
