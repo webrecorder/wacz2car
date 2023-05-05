@@ -118,7 +118,6 @@ export async function wacz2Writer (loader, writer) {
       const cid = await warc2Writer(data, writer)
       concatCID(waczRoot, cid, data.size)
     } else {
-      console.log({ data, name })
       await concatStream(waczRoot, data, writer, name)
     }
   }
@@ -166,6 +165,7 @@ async function * splitZip (zipReader) {
       filename,
       deflate,
       compressedSize,
+      uncompressedSize,
       offset,
       localEntryOffset
     } = entryInfo
@@ -182,7 +182,7 @@ async function * splitZip (zipReader) {
 
     yield { data: headerChunk, name: '', compressed: false }
 
-    const dataChunk = await zipReader.loader.getRange(start, offset - start, true)
+    const dataChunk = await zipReader.loader.getRange(offset, compressedSize, true)
 
     yield { data: dataChunk, name: filename, compressed: !!deflate }
 
@@ -284,8 +284,6 @@ async function concatBlob (file, blob, writer, name) {
     actualSize += value.length
     fileWriter.write(value)
   }
-
-  console.log('actualSize', 'size', actualSize, size, name || '<zip data>')
 
   const { cid } = await fileWriter.close()
 

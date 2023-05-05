@@ -45,8 +45,6 @@ test('Convert example to a CAR', async (t) => {
 
   t.assert(file, 'got file back out of CAR')
 
-  // console.log(file.node.Links)
-
   const fileChunks = await collect(file.content())
   const fileBuffer = Buffer.concat(fileChunks).buffer
 
