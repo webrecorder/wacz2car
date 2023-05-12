@@ -37,6 +37,7 @@
     "@webrecorder/wabac": "^2.15.5",
     "ipfs-car": "^1.0.0",
     "ipfs-unixfs": "^11.0.0",
-    "multiformats": "^11.0.2"
+    "multiformats": "^11.0.2",
+    "warcio": "^2.1.0"
   }
 }

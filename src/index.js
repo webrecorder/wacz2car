@@ -12,56 +12,20 @@ import {
 } from '@ipld/unixfs'
 import { UnixFS } from 'ipfs-unixfs'
 import { CAREncoderStream } from 'ipfs-car'
+import { WARCParser } from 'warcio'
 
 import * as PB from '@ipld/dag-pb'
 import { CID } from 'multiformats/cid'
+import * as Raw from 'multiformats/codecs/raw'
+import * as Bytes from 'multiformats/bytes'
+import { identity } from 'multiformats/hashes/identity'
 import { sha256 } from 'multiformats/hashes/sha2'
 
 import { ZipRangeReader } from '@webrecorder/wabac/src/wacz/ziprangereader.js'
 
-// Blocks smaller than or equal to this size will be inlined into a CID
-// const BLOCK_INLINE_SIZE = 32
-
-/*
-export interface ChunkSettings {
-  rawLeaves: boolean
-  maxSize: number
-}
-
-const DEFAULT_CHUNK_SETTINGS = {
-  rawLeaves: true,
-  maxSize: 256
-}
-
-interface Link {
-  Name: string
-  TSize: number
-  Hash: CID
-}
-
-interface UnixFSInProgress {
-  node: UnixFS
-  links: Link[]
-}
-
-interface ZipEntry {
-  data: Blob
-  name: string
-}
-
-interface ZipEntryOffset {
-  start: number
-  size: number
-  name: string
-  next: number
-}
-
-interface WarcRecord {
-  blob: Blob
-  bodyOffset: number
-  // TODO: Parsed header info?
-}
-*/
+// Encode the WARC record end into a "raw" CID which contains the raw data within it
+const WARC_RECORD_END_BYTES = Bytes.fromString('\r\n\r\n')
+const WARC_RECORD_END = CID.create(1, Raw.code, identity.digest(WARC_RECORD_END_BYTES))
 
 /*
  * @param {BlockLoader} blockLoader
@@ -112,13 +76,15 @@ export async function wacz2Writer (loader, writer) {
 
   const zipreader = new ZipRangeReader(loader)
 
-  for await (const { data, name } of splitZip(zipreader)) {
+  for await (const { name, start, length } of splitZip(zipreader)) {
     const isWarcFile = name.endsWith('.warc')
     if (isWarcFile) {
-      const cid = await warc2Writer(data, writer)
-      concatCID(waczRoot, cid, data.size)
+      const cid = await warc2Writer(loader, start, length, writer)
+      concatCID(waczRoot, cid, length)
     } else {
-      await concatStream(waczRoot, data, writer, name)
+      const data = await loader.getRange(start, length, true)
+
+      await concatStream(waczRoot, data, writer)
     }
   }
 
@@ -128,16 +94,28 @@ export async function wacz2Writer (loader, writer) {
 }
 
 /*
- * @param {Blob} warcBlob
+ * @param {BlockLoader} loader
  * @param {BlockWriter} writer
  * @returns {Promise<CID>}
 */
 export async function warc2Writer (loader, offset, length, writer) {
   const warcRoot = newNode()
 
-  for await (const entry of splitWarc(loader, offset, length)) {
-    // TODO: Extract response body into own subfile
-    await concatBlob(warcRoot, entry.blob, writer)
+  const stream = await loader.getRange(offset, length, true)
+
+  const reader = await stream.getReader()
+  const parser = new WARCParser(reader)
+
+  for await (const record of parser) {
+    // TODO: Account for response type
+    await record.skipFully()
+
+    const recordStart = offset + parser.offset
+    const recordLength = parser.recordLength
+
+    const recordStream = await loader.getRange(recordStart, recordLength, true)
+    await concatStream(warcRoot, recordStream, writer)
+    concatCID(warcRoot, WARC_RECORD_END, WARC_RECORD_END_BYTES.length)
   }
 
   const cid = await putUnixFS(warcRoot, writer)
@@ -165,7 +143,6 @@ async function * splitZip (zipReader) {
       filename,
       deflate,
       compressedSize,
-      uncompressedSize,
       offset,
       localEntryOffset
     } = entryInfo
@@ -177,14 +154,22 @@ async function * splitZip (zipReader) {
       start = readOffset
     }
 
+    const headerLength = offset - start
     // TODO: Handle signals
-    const headerChunk = await zipReader.loader.getRange(start, offset - start, true)
 
-    yield { data: headerChunk, name: '', compressed: false }
+    yield {
+      name: '',
+      compressed: false,
+      start,
+      length: headerLength
+    }
 
-    const dataChunk = await zipReader.loader.getRange(offset, compressedSize, true)
-
-    yield { data: dataChunk, name: filename, compressed: !!deflate }
+    yield {
+      name: filename,
+      compressed: !!deflate,
+      start: offset,
+      length: compressedSize
+    }
 
     readOffset = end
   }
@@ -192,18 +177,15 @@ async function * splitZip (zipReader) {
   const length = await zipReader.loader.getLength()
 
   if (readOffset < length) {
-    const finalData = await zipReader.loader.getRange(readOffset, length - readOffset, true)
+    const remainingLength = length - readOffset
 
-    yield { data: finalData, name: '', compressed: false }
+    yield {
+      name: '',
+      compressed: false,
+      start: readOffset,
+      length: remainingLength
+    }
   }
-}
-
-/*
- * @param {Blob} warcBlob
- * @returns {AsyncIterator<WarcRecord>}
-*/
-async function * splitWarc (warcBlob) {
-  // Stat reading warc headings
 }
 
 /*
@@ -237,7 +219,7 @@ async function putUnixFS (file, writer) {
  * @param {BlockWriter} writer
  * @returns {Promise<void>}
 */
-async function concatStream (file, stream, writer, name) {
+async function concatStream (file, stream, writer) {
   // TODO: Pass chunking options here
   const fileWriter = createFileWriter(writer)
 
@@ -255,40 +237,6 @@ async function concatStream (file, stream, writer, name) {
   const { cid } = await fileWriter.close()
 
   concatCID(file, cid, actualSize)
-}
-
-/*
- * @param {UnixFSInProgress} file
- * @param {Blob} blob
- * @param {BlockWriter} writer
- * @returns {Promise<void>}
-*/
-async function concatBlob (file, blob, writer, name) {
-  // Detect size
-  const size = blob.size
-  // disabled for now
-  // if (false && size <= BLOCK_INLINE_SIZE) {
-  // TODO: Make inline CID instead of block encoding of the data
-  // } else {
-  // TODO: Pass chunking options here
-  const fileWriter = createFileWriter(writer)
-
-  let actualSize = 0
-
-  const stream = blob.stream()
-  const reader = await stream.getReader()
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    actualSize += value.length
-    fileWriter.write(value)
-  }
-
-  const { cid } = await fileWriter.close()
-
-  concatCID(file, cid, blob.size)
-  // }
 }
 
 /*
@@ -314,9 +262,4 @@ function newNode () {
     node: new UnixFS({ type: 'file' }),
     links: []
   }
-}
-
-// for now, as slice() returns incorrect length if offset is not 0!
-function slice (blob, start, end) {
-  return blob.slice(start, end).slice(0, end - start)
 }
