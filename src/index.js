@@ -106,13 +106,18 @@ export async function warc2Writer (loader, offset, length, writer) {
   const reader = await stream.getReader()
   const parser = new WARCParser(reader)
 
-  for await (const record of parser) {
+  const iterator = parser[Symbol.asyncIterator]()
+
+  while (true) {
+    const { value: record, done } = await iterator.next()
+    if (done) break
     const type = record.warcType
     const warcHeadersEndOffset = parser._warcHeadersLength
 
     await record.skipFully()
 
     if (type === 'response') {
+      const reqResPair = newNode()
       const recordStart = offset + parser.offset
       const recordLength = parser.recordLength
 
@@ -122,12 +127,41 @@ export async function warc2Writer (loader, offset, length, writer) {
       const contentLength = recordLength - warcHeadersLength
 
       const headersStream = await loader.getRange(recordStart, warcHeadersLength, true)
-      await concatStream(warcRoot, headersStream, writer)
+      await concatStream(reqResPair, headersStream, writer)
 
       const contentStream = await loader.getRange(contentStart, contentLength, true)
-      await concatStream(warcRoot, contentStream, writer)
+      await concatStream(reqResPair, contentStream, writer)
 
-      concatCID(warcRoot, WARC_RECORD_END, WARC_RECORD_END_BYTES.length)
+      const { value: request, done } = await iterator.next()
+
+      if (done) {
+        const totalLength = recordLength + WARC_RECORD_END_BYTES.length
+        concatCID(reqResPair, WARC_RECORD_END, WARC_RECORD_END_BYTES.length)
+        const cid = await putUnixFS(reqResPair, writer)
+        concatCID(warcRoot, cid, totalLength)
+        continue
+      }
+
+      const requestType = request.warcType
+
+      if (requestType !== 'request') {
+        throw new Error(`Unable to parse WARC, expected 'request' after 'response', got ${requestType}`)
+      }
+
+      await record.skipFully()
+
+      // Include newlines before and after the request record
+      const requestStart = offset + parser.offset - WARC_RECORD_END_BYTES.length
+      const requestLength = parser.recordLength + WARC_RECORD_END_BYTES.length * 2
+
+      const requestStream = await loader.getRange(requestStart, requestLength, true)
+      await concatStream(reqResPair, requestStream, writer)
+
+      const totalLength = recordLength + WARC_RECORD_END_BYTES.length + requestLength
+
+      const cid = await putUnixFS(reqResPair, writer)
+      concatCID(warcRoot, cid, totalLength)
+
       continue
     }
 
