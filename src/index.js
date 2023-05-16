@@ -107,15 +107,36 @@ export async function warc2Writer (loader, offset, length, writer) {
   const parser = new WARCParser(reader)
 
   for await (const record of parser) {
-    // TODO: Account for response type
+    const type = record.warcType
+    const warcHeadersEndOffset = parser._warcHeadersLength
+
     await record.skipFully()
 
+    if (type === 'response') {
+      const recordStart = offset + parser.offset
+      const recordLength = parser.recordLength
+
+      const warcHeadersLength = recordStart - warcHeadersEndOffset
+
+      const contentStart = recordStart + warcHeadersLength
+      const contentLength = recordLength - warcHeadersLength
+
+      const headersStream = await loader.getRange(recordStart, warcHeadersLength, true)
+      await concatStream(warcRoot, headersStream, writer)
+
+      const contentStream = await loader.getRange(contentStart, contentLength, true)
+      await concatStream(warcRoot, contentStream, writer)
+
+      concatCID(warcRoot, WARC_RECORD_END, WARC_RECORD_END_BYTES.length)
+      continue
+    }
+
     const recordStart = offset + parser.offset
-    const recordLength = parser.recordLength
+    // Since we're reading the full record, include the end newlines in this chunk
+    const recordLength = parser.recordLength + WARC_RECORD_END_BYTES.length
 
     const recordStream = await loader.getRange(recordStart, recordLength, true)
     await concatStream(warcRoot, recordStream, writer)
-    concatCID(warcRoot, WARC_RECORD_END, WARC_RECORD_END_BYTES.length)
   }
 
   const cid = await putUnixFS(warcRoot, writer)
