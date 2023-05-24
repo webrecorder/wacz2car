@@ -51,7 +51,15 @@ export function wacz2BlockStream (blockLoader) {
     withCapacity(1048576 * 32)
   )
 
-  const writer = createWriter({ writable })
+  const writer = createWriter({
+    writable,
+
+    settings: {
+      // Encode leaf nodes as raw blocks
+      //fileChunkEncoder: Raw,
+      //smallFileEncoder: Raw
+    }
+  })
 
   wacz2Writer(blockLoader, writer).then(async () => {
     await writer.writer.ready
@@ -121,10 +129,12 @@ export async function warc2Writer (loader, offset, length, writer) {
       const recordStart = offset + parser.offset
       const recordLength = parser.recordLength
 
-      const warcHeadersLength = recordStart - warcHeadersEndOffset
+      const warcHeadersLength = warcHeadersEndOffset - parser.offset
 
       const contentStart = recordStart + warcHeadersLength
       const contentLength = recordLength - warcHeadersLength
+
+      console.log({ record, headers: [...record.warcHeaders.headers], recordStart, recordLength, contentStart, contentLength, warcHeadersLength })
 
       const headersStream = await loader.getRange(recordStart, warcHeadersLength, true)
       await concatStream(reqResPair, headersStream, writer)
@@ -270,9 +280,9 @@ async function putUnixFS (file, writer) {
 
 /*
  * @param {UnixFSInProgress} file
- * @param {Blob} blob
+ * @param {ReadableStream} stream
  * @param {BlockWriter} writer
- * @returns {Promise<void>}
+ * @returns {Promise<CID>}
 */
 async function concatStream (file, stream, writer) {
   // TODO: Pass chunking options here
@@ -292,6 +302,8 @@ async function concatStream (file, stream, writer) {
   const { cid } = await fileWriter.close()
 
   concatCID(file, cid, actualSize)
+
+  return cid
 }
 
 /*
