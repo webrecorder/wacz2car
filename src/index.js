@@ -56,8 +56,8 @@ export function wacz2BlockStream (blockLoader) {
 
     settings: {
       // Encode leaf nodes as raw blocks
-      //fileChunkEncoder: Raw,
-      //smallFileEncoder: Raw
+      // fileChunkEncoder: Raw,
+      // smallFileEncoder: Raw
     }
   })
 
@@ -120,26 +120,26 @@ export async function warc2Writer (loader, offset, length, writer) {
     const { value: record, done } = await iterator.next()
     if (done) break
     const type = record.warcType
-    const warcHeadersEndOffset = parser._warcHeadersLength
+    //const warcHeadersEndOffset = parser._warcHeadersLength
 
-    await record.skipFully()
+    // await record.skipFully()
 
     if (type === 'response') {
       const reqResPair = newNode()
-      const recordStart = offset + parser.offset
-      const recordLength = parser.recordLength
+      const recordStart = parser.offset;
 
-      const warcHeadersLength = warcHeadersEndOffset - parser.offset
+      const contentStart = parser._reader.getReadOffset();
+      const headersLength = contentStart - parser.offset;
 
-      const contentStart = recordStart + warcHeadersLength
-      const contentLength = recordLength - warcHeadersLength
-
-      console.log({ record, headers: [...record.warcHeaders.headers], recordStart, recordLength, contentStart, contentLength, warcHeadersLength })
-
-      const headersStream = await loader.getRange(recordStart, warcHeadersLength, true)
+      const headersStream = await loader.getRange(recordStart + offset, headersLength, true)
       await concatStream(reqResPair, headersStream, writer)
 
-      const contentStream = await loader.getRange(contentStart, contentLength, true)
+      await record.skipFully()
+
+      const recordLength = parser.recordLength
+      const contentLength = recordLength - headersLength
+
+      const contentStream = await loader.getRange(contentStart + offset, contentLength, true)
       await concatStream(reqResPair, contentStream, writer)
 
       const { value: request, done } = await iterator.next()
@@ -160,27 +160,37 @@ export async function warc2Writer (loader, offset, length, writer) {
 
       await record.skipFully()
 
-      // Include newlines before and after the request record
-      const requestStart = offset + parser.offset - WARC_RECORD_END_BYTES.length
-      const requestLength = parser.recordLength + WARC_RECORD_END_BYTES.length * 2
+      // start from end of content
+      const requestStart = contentStart + contentLength;
 
-      const requestStream = await loader.getRange(requestStart, requestLength, true)
+      // include whatever is left from previous record (newlines) until end of request record
+      const requestLength = parser.recordLength + (parser.offset - requestStart) + WARC_RECORD_END_BYTES.length;
+
+      const requestStream = await loader.getRange(requestStart + offset, requestLength, true)
       await concatStream(reqResPair, requestStream, writer)
 
-      const totalLength = recordLength + WARC_RECORD_END_BYTES.length + requestLength
+      const totalLength = recordLength + 2*WARC_RECORD_END_BYTES.length + requestLength;
 
       const cid = await putUnixFS(reqResPair, writer)
-      concatCID(warcRoot, cid, totalLength)
+      //console.log("PAIR CID", cid, reqResPair);
+
+      concatCID(warcRoot, cid, totalLength);
 
       continue
+    } else {
+      await record.skipFully();
+
+      // Since we're reading the full record, include the end newlines in this chunk
+      const recordLength = parser.recordLength + WARC_RECORD_END_BYTES.length
+      const recordStream = await loader.getRange(parser.offset + offset, recordLength, true)
+
+      const recordNode = newNode();
+      await concatStream(recordNode, recordStream, writer)
+
+      const cid = await putUnixFS(recordNode, writer)
+      //console.log("SINGLE CID", cid, recordNode);
+      concatCID(warcRoot, cid, recordLength)
     }
-
-    const recordStart = offset + parser.offset
-    // Since we're reading the full record, include the end newlines in this chunk
-    const recordLength = parser.recordLength + WARC_RECORD_END_BYTES.length
-
-    const recordStream = await loader.getRange(recordStart, recordLength, true)
-    await concatStream(warcRoot, recordStream, writer)
   }
 
   const cid = await putUnixFS(warcRoot, writer)
