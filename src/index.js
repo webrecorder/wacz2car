@@ -120,16 +120,16 @@ export async function warc2Writer (loader, offset, length, writer) {
     const { value: record, done } = await iterator.next()
     if (done) break
     const type = record.warcType
-    //const warcHeadersEndOffset = parser._warcHeadersLength
+    // const warcHeadersEndOffset = parser._warcHeadersLength
 
     // await record.skipFully()
 
     if (type === 'response') {
       const reqResPair = newNode()
-      const recordStart = parser.offset;
+      const recordStart = parser.offset
 
-      const contentStart = parser._reader.getReadOffset();
-      const headersLength = contentStart - parser.offset;
+      const contentStart = parser._reader.getReadOffset()
+      const headersLength = contentStart - parser.offset
 
       const headersStream = await loader.getRange(recordStart + offset, headersLength, true)
       await concatStream(reqResPair, headersStream, writer)
@@ -161,34 +161,34 @@ export async function warc2Writer (loader, offset, length, writer) {
       await record.skipFully()
 
       // start from end of content
-      const requestStart = contentStart + contentLength;
+      const requestStart = contentStart + contentLength
 
       // include whatever is left from previous record (newlines) until end of request record
-      const requestLength = parser.recordLength + (parser.offset - requestStart) + WARC_RECORD_END_BYTES.length;
+      const requestLength = parser.recordLength + (parser.offset - requestStart) + WARC_RECORD_END_BYTES.length
 
       const requestStream = await loader.getRange(requestStart + offset, requestLength, true)
       await concatStream(reqResPair, requestStream, writer)
 
-      const totalLength = recordLength + 2*WARC_RECORD_END_BYTES.length + requestLength;
+      const totalLength = recordLength + 2 * WARC_RECORD_END_BYTES.length + requestLength
 
       const cid = await putUnixFS(reqResPair, writer)
-      //console.log("PAIR CID", cid, reqResPair);
+      // console.log("PAIR CID", cid, reqResPair);
 
-      concatCID(warcRoot, cid, totalLength);
+      concatCID(warcRoot, cid, totalLength)
 
       continue
     } else {
-      await record.skipFully();
+      await record.skipFully()
 
       // Since we're reading the full record, include the end newlines in this chunk
       const recordLength = parser.recordLength + WARC_RECORD_END_BYTES.length
       const recordStream = await loader.getRange(parser.offset + offset, recordLength, true)
 
-      const recordNode = newNode();
+      const recordNode = newNode()
       await concatStream(recordNode, recordStream, writer)
 
       const cid = await putUnixFS(recordNode, writer)
-      //console.log("SINGLE CID", cid, recordNode);
+      // console.log("SINGLE CID", cid, recordNode);
       concatCID(warcRoot, cid, recordLength)
     }
   }
