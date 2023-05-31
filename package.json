@@ -1,0 +1,43 @@
+{
+  "name": "wacz2car",
+  "version": "0.1.0",
+  "description": "Conver WACZ files to CAR files for uploading to IPFS.",
+  "type": "module",
+  "scripts": {
+    "test": "ava --timeout=5m",
+    "lint": "standard --fix ./src test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/webrecorder/wacz2car.git"
+  },
+  "keywords": [
+    "warc",
+    "wacz",
+    "ipfs",
+    "car",
+    "upload",
+    "p2p",
+    "archive"
+  ],
+  "author": "WebRecorder",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/webrecorder/wacz2car/issues"
+  },
+  "homepage": "https://github.com/webrecorder/wacz2car#readme",
+  "devDependencies": {
+    "ava": "^5.2.0",
+    "standard": "^17.0.0"
+  },
+  "dependencies": {
+    "@ipld/car": "^5.1.1",
+    "@ipld/dag-pb": "^4.0.2",
+    "@ipld/unixfs": "^2.1.1",
+    "@webrecorder/wabac": "^2.15.5",
+    "ipfs-car": "^1.0.0",
+    "ipfs-unixfs": "^11.0.0",
+    "multiformats": "^11.0.2",
+    "warcio": "^2.1.0"
+  }
+}
