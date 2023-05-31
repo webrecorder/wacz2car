@@ -47,12 +47,6 @@ test('Convert example to a CAR', async (t) => {
       }
       const block = await reader.get(cid)
 
-      const blockText = Buffer.from(block.bytes).toString('ascii')
-      const blockStart = blockText.slice(0, 32)
-      const blockEnd = blockText.slice(-8)
-      const blockShort = `${JSON.stringify(blockStart)}...(${blockText.length})...${JSON.stringify(blockEnd)}`
-
-      // console.log(block.cid, blockShort)
       return block.bytes
     }
   })

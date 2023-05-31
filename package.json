@@ -1,6 +1,6 @@
 {
   "name": "wacz2car",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Conver WACZ files to CAR files for uploading to IPFS.",
   "type": "module",
   "scripts": {
