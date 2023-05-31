@@ -1,7 +1,7 @@
 {
   "name": "wacz2car",
   "version": "0.1.0",
-  "description": "Conver WACZ files to CAR files for uploading to IPFS.",
+  "description": "Convert WACZ files to CAR files for uploading to IPFS.",
   "type": "module",
   "scripts": {
     "test": "ava --timeout=5m",

@@ -1,5 +1,5 @@
 # wacz2car
-Conver WACZ files to CAR files for uploading to IPFS.
+Convert WACZ files to CAR files for uploading to IPFS.
 
 ```JavaScript
 import {wacz2Car} from 'wacz2car'
