@@ -120,9 +120,6 @@ export async function warc2Writer (loader, offset, length, writer) {
     const { value: record, done } = await iterator.next()
     if (done) break
     const type = record.warcType
-    // const warcHeadersEndOffset = parser._warcHeadersLength
-
-    // await record.skipFully()
 
     if (type === 'response') {
       const reqResPair = newNode()
@@ -158,7 +155,7 @@ export async function warc2Writer (loader, offset, length, writer) {
         throw new Error(`Unable to parse WARC, expected 'request' after 'response', got ${requestType}`)
       }
 
-      await record.skipFully()
+      await request.skipFully()
 
       // start from end of content
       const requestStart = contentStart + contentLength
@@ -172,7 +169,6 @@ export async function warc2Writer (loader, offset, length, writer) {
       const totalLength = recordLength + 2 * WARC_RECORD_END_BYTES.length + requestLength
 
       const cid = await putUnixFS(reqResPair, writer)
-      // console.log("PAIR CID", cid, reqResPair);
 
       concatCID(warcRoot, cid, totalLength)
 

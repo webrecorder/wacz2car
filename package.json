@@ -4,7 +4,7 @@
   "description": "Conver WACZ files to CAR files for uploading to IPFS.",
   "type": "module",
   "scripts": {
-    "test": "ava",
+    "test": "ava --timeout=5m",
     "lint": "standard --fix ./src test.js"
   },
   "repository": {

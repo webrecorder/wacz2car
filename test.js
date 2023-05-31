@@ -52,7 +52,7 @@ test('Convert example to a CAR', async (t) => {
       const blockEnd = blockText.slice(-8)
       const blockShort = `${JSON.stringify(blockStart)}...(${blockText.length})...${JSON.stringify(blockEnd)}`
 
-      console.log(block.cid, blockShort)
+      // console.log(block.cid, blockShort)
       return block.bytes
     }
   })
