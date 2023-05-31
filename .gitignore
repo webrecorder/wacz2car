@@ -102,3 +102,7 @@ dist
 
 # TernJS port file
 .tern-port
+
+# Test files
+fixtures/webarchive-duplicates.wacz
+fixtures/expected.car
