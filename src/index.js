@@ -27,6 +27,9 @@ import { ZipRangeReader } from '@webrecorder/wabac/src/wacz/ziprangereader.js'
 const WARC_RECORD_END_BYTES = Bytes.fromString('\r\n\r\n')
 const WARC_RECORD_END = CID.create(1, Raw.code, identity.digest(WARC_RECORD_END_BYTES))
 
+// This should be replaced with your actual root CID after the CAR file is written (if you care)
+const DEFAULT_ROOT_CID = CID.parse('bafybeicji56mtpjwxthoiawbnilzl7s7icfsoh45zvq7a25caddnragrby')
+
 /*
  * @param {BlockLoader} blockLoader
  * @returns {CAREncoderStream}
@@ -34,7 +37,7 @@ const WARC_RECORD_END = CID.create(1, Raw.code, identity.digest(WARC_RECORD_END_
 export function wacz2Car (blockLoader) {
   const blockStream = wacz2BlockStream(blockLoader)
 
-  const carEncoder = new CAREncoderStream([])
+  const carEncoder = new CAREncoderStream([DEFAULT_ROOT_CID])
 
   blockStream.pipeThrough(carEncoder)
 
