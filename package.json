@@ -7,6 +7,9 @@
     "test": "ava --timeout=5m",
     "lint": "standard --fix ./src test.js"
   },
+  "bin": {
+    "wacz2car": "src/bin.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/webrecorder/wacz2car.git"
